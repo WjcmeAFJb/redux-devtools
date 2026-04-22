@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head><title>SerializedType test page</title></head>
+<body>
+<h1>SerializedType test page</h1>
+<div id="status">loading…</div>
+<pre id="log"></pre>
+<script>
+  (function waitForExtension() {
+    if (!window.__REDUX_DEVTOOLS_EXTENSION__) {
+      return setTimeout(waitForExtension, 50);
+    }
+    var devTools = window.__REDUX_DEVTOOLS_EXTENSION__.connect({
+      serialize: true,
+      name: 'SerializedTypeFixture',
+    });
+    // Use the __serializedType__ raw-API shape directly. The extension is
+    // expected to turn this into a type tag in the UI rather than render
+    // the literal property.
+    devTools.init({
+      wrapped: {
+        __serializedType__: 'FixtureTag',
+        data: { inner: 'value-42' },
+      },
+      plain: 'hello',
+    });
+    document.getElementById('status').textContent = 'initialized';
+    document.getElementById('log').textContent = 'connected + init sent';
+  })();
+</script>
+</body>
+</html>

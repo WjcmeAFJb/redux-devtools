@@ -11,6 +11,7 @@ import {
   TOGGLE_PERSIST,
   UPDATE_STATE,
 } from '@redux-devtools/app';
+import type { Options as InstanceOptions } from '@redux-devtools/app';
 import type { Options, OptionsMessage } from '../../options/syncOptions.js';
 import openDevToolsWindow, { DevToolsPosition } from '../openWindow.js';
 import { getReport } from '../logging.js';
@@ -241,6 +242,23 @@ let monitors = 0;
 
 const getId = (sender: chrome.runtime.MessageSender, name?: string) =>
   sender.tab ? sender.tab.id! : name || sender.id!;
+
+// Rebuild a LibConfig from the cached Options so panels that open after a
+// tab has already initialized an instance receive the same serialize/features
+// settings the tab sent via INIT. Without this, the newly-opened panel's
+// reducer defaults serialize to undefined and __serializedType__ stays a
+// literal property rather than becoming a type tag.
+function optionsToLibConfig(options: InstanceOptions): LibConfig {
+  return {
+    actionCreators: options.actionCreators
+      ? JSON.stringify(options.actionCreators)
+      : undefined,
+    name: typeof options.name === 'string' ? options.name : undefined,
+    type: options.explicitLib,
+    features: options.features,
+    serialize: options.serialize,
+  };
+}
 
 type MonitorAction<S, A extends Action<string>> =
   | NAAction
@@ -615,6 +633,7 @@ function onConnect<S, A extends Action<string>>(port: chrome.runtime.Port) {
           source: '@devtools-page',
           instanceId:
             typeof current === 'number' ? current.toString() : current,
+          libConfig: optionsToLibConfig(options),
           actionsById: stringifyJSON(actionsById, options.serialize),
           computedStates: stringifyJSON(computedStates, options.serialize),
           committedState: typeof committedState !== 'undefined',
