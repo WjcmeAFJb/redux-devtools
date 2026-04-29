@@ -44,6 +44,7 @@ import {
   StructuralPerformAction,
   ConnectResponse,
 } from './api/index.js';
+import { asyncStack } from './api/asyncStack.js';
 import type { ContentScriptToPageScriptMessage } from '../contentScript/index.js';
 
 type EnhancedStoreWithInitialDispatch<
@@ -551,7 +552,16 @@ function __REDUX_DEVTOOLS_EXTENSION__<S, A extends Action<string>>(
 declare global {
   interface Window {
     __REDUX_DEVTOOLS_EXTENSION__: ReduxDevtoolsExtension;
+    asyncStack: AsyncStack;
   }
+}
+
+interface AsyncStack {
+  (): Promise<string>;
+  // Pre-attach the chrome.debugger so the first asyncStack() call after
+  // page load returns a complete async stack. Optional — without it, the
+  // first call's stack is truncated to the message-handler boundary.
+  warmup: () => Promise<void>;
 }
 
 // noinspection JSAnnotator
@@ -562,6 +572,7 @@ window.__REDUX_DEVTOOLS_EXTENSION__.send = sendMessage;
 window.__REDUX_DEVTOOLS_EXTENSION__.listen = setListener;
 window.__REDUX_DEVTOOLS_EXTENSION__.connect = connect;
 window.__REDUX_DEVTOOLS_EXTENSION__.disconnect = disconnect;
+window.asyncStack = asyncStack;
 
 const preEnhancer =
   (instanceId: number): StoreEnhancer =>

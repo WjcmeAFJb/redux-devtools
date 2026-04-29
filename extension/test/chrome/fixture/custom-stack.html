@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head><title>Custom send-stack test page</title></head>
+<body>
+<h1>Custom send-stack test page</h1>
+<div id="status">waiting…</div>
+<script>
+  // A made-up stack from a hypothetical MobX reaction batcher: the JS
+  // call stack at dispatch time has nothing to do with where the action
+  // semantically came from, so the integration provides the "right"
+  // stack as a string. The parser in the trace tab is lenient — it
+  // accepts the standard Chrome `at name (file:line:col)` shape.
+  const customStack = [
+    'Error',
+    '    at simulatedMobxReaction (https://example.com/store.js:42:10)',
+    '    at simulatedBatchScheduler (https://example.com/store.js:30:5)',
+    '    at simulatedDomEvent (https://example.com/ui.jsx:101:3)',
+  ].join('\n');
+
+  function waitForExt() {
+    if (!window.__REDUX_DEVTOOLS_EXTENSION__) {
+      return setTimeout(waitForExt, 50);
+    }
+    const devTools = window.__REDUX_DEVTOOLS_EXTENSION__.connect({
+      name: 'CustomStackFixture',
+      features: { jump: true, dispatch: true },
+      // `trace: true` makes the extension auto-capture the JS call stack
+      // for every action — we want to verify that the integration's
+      // explicit options.stack OVERRIDES that auto-captured stack.
+      trace: true,
+    });
+    devTools.init({ count: 0 });
+    devTools.send({ type: 'CUSTOM_ACTION' }, { count: 1 }, { stack: customStack });
+    // A second action with NO custom stack — the auto-captured trace
+    // should still kick in for that one (no regression).
+    devTools.send({ type: 'AUTO_TRACED' }, { count: 2 });
+    document.getElementById('status').textContent = 'sent';
+    window.__customStack__ = customStack;
+  }
+  waitForExt();
+</script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head><title>asyncStack test page</title></head>
+<body>
+<h1>asyncStack test page</h1>
+<div id="status">waiting for extension…</div>
+<pre id="stack" style="white-space:pre-wrap;font-family:monospace"></pre>
+<script>
+  // The dynamic id is generated at runtime so that V8 cannot infer a name
+  // for the function literal at parse time — this is the case the feature
+  // is supposed to handle (MobX reactions, computed property keys, etc.).
+  const dynamicId = 'reaction_' + Math.floor(Math.random() * 9999);
+
+  async function topLevel() {
+    // Pause across an async boundary so the captured async parent chain
+    // has a real setTimeout-scheduled continuation between us and the
+    // initial caller.
+    await new Promise((r) => setTimeout(r, 30));
+    await secondLevel();
+  }
+
+  async function secondLevel() {
+    await new Promise((r) => setTimeout(r, 30));
+    // Computed-property method, hidden from V8's name-inference until
+    // the property is actually accessed at runtime.
+    await ({
+      [dynamicId]: async function () {
+        await new Promise((r) => setTimeout(r, 30));
+        await innerMost();
+      },
+    })[dynamicId]();
+  }
+
+  async function innerMost() {
+    await new Promise((r) => setTimeout(r, 30));
+    const stack = await window.asyncStack();
+    window.__capturedStack__ = stack;
+    window.__dynamicId__ = dynamicId;
+    document.getElementById('stack').textContent = stack;
+    document.getElementById('status').textContent = 'done';
+  }
+
+  async function main() {
+    // Warm up so the FIRST real asyncStack() inside topLevel() resolves
+    // through an already-cached prepare promise — V8 then traces the
+    // async-parent chain through `await prepare()` like it does through
+    // `await Promise.resolve()` and the user's frames remain visible.
+    await window.asyncStack.warmup();
+    await topLevel();
+  }
+
+  function waitForExt() {
+    if (typeof window.asyncStack !== 'function') {
+      return setTimeout(waitForExt, 50);
+    }
+    main().catch((err) => {
+      document.getElementById('status').textContent = 'error: ' + err.message;
+    });
+  }
+  waitForExt();
+</script>
+</body>
+</html>

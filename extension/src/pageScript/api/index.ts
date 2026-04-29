@@ -522,6 +522,18 @@ export function disconnect() {
   post({ type: 'DISCONNECT', source });
 }
 
+/**
+ * Per-send overrides accepted by `connect().send()`. The most common use
+ * is `stack`: integrations like MobX can compute a domain-specific stack
+ * (e.g. the chain of reactions that fired) and pass it directly here, and
+ * the panel's Trace tab will display that string instead of the JS call
+ * stack at the dispatch site (which is often uninformative far from the
+ * action's true source — same problem hits batched dispatches too).
+ */
+export interface SendOptions {
+  readonly stack?: string;
+}
+
 export interface ConnectResponse {
   init: <S, A extends Action<string>>(
     state: S,
@@ -534,6 +546,7 @@ export interface ConnectResponse {
   send: <S, A extends Action<string>>(
     action: A,
     state: LiftedState<S, A, unknown>,
+    options?: SendOptions,
   ) => void;
   error: (payload: string) => void;
 }
@@ -610,6 +623,7 @@ export function connect(preConfig: Config): ConnectResponse {
   const send = <S, A extends Action<string>>(
     action: A,
     state: LiftedState<S, A, unknown>,
+    options?: SendOptions,
   ) => {
     if (
       isPaused ||
@@ -636,6 +650,17 @@ export function connect(preConfig: Config): ConnectResponse {
         amendedAction = config.actionSanitizer(action);
       }
       amendedAction = amendActionType(amendedAction, config, send);
+      // Caller-supplied stack wins over whatever config.trace produced
+      // and over any stack already on a structural action — explicit
+      // intent at the call site beats anything we inferred. Useful for
+      // MobX-style reactions and batched events whose true source isn't
+      // visible in the JS call stack.
+      if (options && typeof options.stack === 'string') {
+        amendedAction = {
+          ...(amendedAction as StructuralPerformAction<A>),
+          stack: options.stack,
+        };
+      }
       if (latency) {
         delayedActions.push(amendedAction);
         delayedStates.push(amendedState);

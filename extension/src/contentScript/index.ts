@@ -329,6 +329,10 @@ function handleMessages<S, A extends Action<string>>(
   }
   const message = event.data;
   if (message.source !== pageSource) return;
+  if ((message as any).type === 'ASYNC_STACK_PREPARE') {
+    handleAsyncStackPrepare();
+    return;
+  }
   if (message.type === 'DISCONNECT') {
     if (bg) {
       bg.disconnect();
@@ -339,6 +343,43 @@ function handleMessages<S, A extends Action<string>>(
 
   tryCatch(send, message);
 }
+
+// Background-routed asyncStack support. The page script asks for the
+// debugger to be attached via window.postMessage; we forward the request
+// over chrome.runtime.sendMessage and route the response back to the page.
+// Captured stacks themselves are pushed back from the background through
+// chrome.tabs.sendMessage and arrive on chrome.runtime.onMessage.
+function handleAsyncStackPrepare() {
+  chrome.runtime.sendMessage(
+    { type: 'ASYNC_STACK_PREPARE' },
+    (response: unknown) => {
+      // chrome.runtime.lastError can fire if the background is asleep or
+      // the extension is disabled; surface that as an error to the page.
+      const err = chrome.runtime.lastError;
+      if (err) {
+        window.postMessage(
+          {
+            source,
+            type: 'ASYNC_STACK_ERROR',
+            message: err.message ?? 'background unreachable',
+          },
+          '*',
+        );
+        return;
+      }
+      if (response && typeof response === 'object') {
+        window.postMessage({ source, ...(response as object) }, '*');
+      }
+    },
+  );
+}
+
+chrome.runtime.onMessage.addListener((msg: unknown) => {
+  if (!msg || typeof msg !== 'object') return;
+  const type = (msg as { type?: string }).type;
+  if (type !== 'ASYNC_STACK_RESULT' && type !== 'ASYNC_STACK_ERROR') return;
+  window.postMessage({ source, ...(msg as object) }, '*');
+});
 
 prefetchOptions();
 
