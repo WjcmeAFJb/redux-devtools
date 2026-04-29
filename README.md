@@ -22,6 +22,46 @@ It can be used as a browser extension (for [Chrome](https://chrome.google.com/we
 - [Recipes](https://github.com/reduxjs/redux-devtools/blob/main/extension/docs/Recipes.md)
 - [FAQ](https://github.com/reduxjs/redux-devtools/blob/main/extension/docs/FAQ.md)
 
+## Stack-trace extras (this fork)
+
+Two opt-in additions for integrations that need richer stack traces than plain `Error.stack`:
+
+### `window.asyncStack(): Promise<string>`
+
+In Chrome the multi-segment async parent chain (across `await`, `setTimeout`, `Promise.then`, …) is only visible to the V8 inspector — not to `Error.stack`. This API attaches the inspector itself via the extension's `chrome.debugger` permission, captures the chain at the call site, and returns it as a string. **Why**: a thrown Error inside a deeply-nested async chain otherwise truncates at the most recent microtask boundary, which is rarely where you want the trace to start.
+
+```js
+async function reactionRoot() {
+  await new Promise(r => setTimeout(r, 30));
+  await reactionInner();
+}
+async function reactionInner() {
+  await new Promise(r => setTimeout(r, 30));
+  console.log(await window.asyncStack());
+  // at reactionInner (app.js:14:10)
+  // --- await ---
+  // at reactionRoot (app.js:9:9)
+}
+```
+
+The capture is opt-in per call: the background only forwards a stack when you call `asyncStack()`, every other `console.*` and uncaught exception is ignored. Function names from computed-property keys (`({[id]: () => {}})[id]()`) — common in MobX reactions and codegen — are preserved in the captured stack. Call `await window.asyncStack.warmup()` once at startup if you need a complete chain on the very first call (without warmup the first call truncates at the cross-process message boundary because V8 cannot trace through host-event Promise resolves).
+
+> Chrome shows its standard "Started debugging this browser" banner the first time `asyncStack()` runs on a tab. The chain works the same in the regular tab and in extension-loaded `file://` pages.
+
+### `connect().send(action, state, { stack })`
+
+Optional third argument: pass a stack-trace string and the panel's Trace tab uses it instead of the JS call stack at dispatch time. **Why**: dispatches from MobX reactions, batch schedulers, async queues, and replay middlewares all share a problem — the call stack at `dispatch` is uninformative because the action's *semantic* source is several frames or scheduler-hops away. Let the integration provide the right stack.
+
+```js
+const tools = window.__REDUX_DEVTOOLS_EXTENSION__.connect({ trace: true });
+tools.init(state);
+// integration knows the reaction that fired this — pass that stack
+// directly so the Trace tab points at the real source:
+tools.send(action, nextState, { stack: mobxReactionStack });
+```
+
+The Trace tab parses the string with the same regex it uses for `Error.stack`, so any Chrome-style `at name (file:line:col)` content renders as clickable frames. When `options.stack` is omitted the existing `config.trace` behaviour is unchanged.
+
 ## Development
 
 This is a monorepo powered by [pnpm](https://pnpm.io/). [Install pnpm](https://pnpm.io/installation) and run `pnpm install` to get started. Each package's dependencies need to be built before the package itself can be built. You can either build all the packages (i.e., `pnpm run build:all`) or use pnpm workspace commands to build only the packages necessary for the packages you're working on (i.e., `pnpm --filter "remotedev-redux-devtools-extension" build`).
