@@ -1,5 +1,26 @@
 # remotedev-redux-devtools-extension
 
+## 3.2.13
+
+### Patch Changes
+
+- fix(extension): recover window.asyncStack() after MV3 service worker idle unload
+
+  The previous implementation cached a `prepared` flag on the page side that
+  only flipped to true on first successful prepare and never reset. When the
+  Manifest V3 service worker was unloaded after ~30s of idle (or the user
+  cancelled the chrome.debugger attach banner), the debugger session was
+  detached but the page kept emitting markers no listener was attached to —
+  every subsequent `asyncStack()` call timed out at 5 seconds. This matched
+  the reported "works a few times then fails every time" symptom.
+
+  Fix:
+  - Background sends `ASYNC_STACK_DETACHED` on `chrome.debugger.onDetach`
+    so the page can invalidate its cached prepare state immediately.
+  - Page-side capture timeout is shortened to 1.5s and on timeout the page
+    resets prepare and retries once — covers the silent SW-killed case
+    where the detach event itself never reached us.
+
 ## 3.2.12
 
 ### Patch Changes
