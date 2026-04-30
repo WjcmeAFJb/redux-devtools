@@ -377,7 +377,13 @@ function handleAsyncStackPrepare() {
 chrome.runtime.onMessage.addListener((msg: unknown) => {
   if (!msg || typeof msg !== 'object') return;
   const type = (msg as { type?: string }).type;
-  if (type !== 'ASYNC_STACK_RESULT' && type !== 'ASYNC_STACK_ERROR') return;
+  if (
+    type !== 'ASYNC_STACK_RESULT' &&
+    type !== 'ASYNC_STACK_ERROR' &&
+    type !== 'ASYNC_STACK_DETACHED'
+  ) {
+    return;
+  }
   window.postMessage({ source, ...(msg as object) }, '*');
 });
 

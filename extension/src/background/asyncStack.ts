@@ -79,6 +79,15 @@ function detach(tabId: number) {
   void chrome.debugger.detach({ tabId }).catch(() => undefined);
 }
 
+// Tell the page that the cached prepared state is stale. Without this
+// signal the page would only discover the detach when the next capture
+// times out (the marker would land in a tab whose debugger is no longer
+// attached). The page resets its `prepared` flag on receipt and the next
+// asyncStack() call goes through prepare() again.
+function notifyDetached(tabId: number) {
+  sendToTab(tabId, { type: 'ASYNC_STACK_DETACHED' });
+}
+
 function formatFrame(frame: CallFrame): string {
   const name = frame.functionName?.trim() || '<anonymous>';
   const url = frame.url || '<eval>';
@@ -172,7 +181,13 @@ chrome.debugger.onEvent.addListener(
 );
 
 chrome.debugger.onDetach.addListener((source) => {
-  if (source.tabId != null) attached.delete(source.tabId);
+  const tabId = source.tabId;
+  if (tabId == null) return;
+  // Only notify if we believed we were attached — avoids a notification
+  // for an attach we already cleaned up via tab close.
+  const wasAttached = attached.has(tabId);
+  attached.delete(tabId);
+  if (wasAttached) notifyDetached(tabId);
 });
 
 if (typeof chrome.tabs?.onRemoved?.addListener === 'function') {

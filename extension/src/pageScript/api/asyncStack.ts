@@ -7,13 +7,18 @@
 //
 // Protocol with the content script (and onward to background):
 //   page -> contentScript: { type: 'ASYNC_STACK_PREPARE' }
-//                          (sent on first call only — debugger attach is lazy)
+//                          (sent on first call, and again after any debugger
+//                          detach — the MV3 service worker can be unloaded
+//                          while idle, which auto-detaches chrome.debugger)
 //   contentScript -> page: { type: 'ASYNC_STACK_READY' | 'ASYNC_STACK_ERROR' }
 //   page -> contentScript: nothing — the page emits a tagged console.warn,
 //                          the background's debugger event listener picks it
 //                          up and only then forwards a result.
 //   contentScript -> page: { type: 'ASYNC_STACK_RESULT', id, stack }
 //                          { type: 'ASYNC_STACK_ERROR', id?, message }
+//                          { type: 'ASYNC_STACK_DETACHED' } — proactive
+//                          invalidation when the background sees its debugger
+//                          session end (idle unload, user cancel, tab nav).
 //
 // The marker prefix is a literal string the background filters by, so the
 // debugger only round-trips a stack for explicit asyncStack() calls — every
@@ -22,6 +27,15 @@
 const PAGE_SOURCE = '@devtools-page';
 const EXT_SOURCE = '@devtools-extension';
 export const ASYNC_STACK_MARKER = '__REDUX_DEVTOOLS_ASYNC_STACK__:';
+
+// Capture timeout. The normal happy-path round-trip is well under 100ms
+// once the debugger is attached; anything past ~1.2s almost certainly means
+// the background's debugger session is gone (MV3 idle unload, user-cancelled
+// attach banner, etc.) and we should re-prepare rather than keep waiting.
+const CAPTURE_TIMEOUT_MS = 1500;
+// Prepare timeout. Cold-start path: SW spinup + chrome.debugger.attach +
+// Debugger.enable + setAsyncCallStackDepth — give it real budget.
+const PREPARE_TIMEOUT_MS = 5000;
 
 interface PendingCall {
   resolve: (stack: string) => void;
@@ -58,10 +72,21 @@ interface AsyncStackErrorMessage {
   readonly message: string;
 }
 
+interface AsyncStackDetachedMessage {
+  readonly source: typeof EXT_SOURCE;
+  readonly type: 'ASYNC_STACK_DETACHED';
+}
+
 type IncomingMessage =
   | AsyncStackReadyMessage
   | AsyncStackResultMessage
-  | AsyncStackErrorMessage;
+  | AsyncStackErrorMessage
+  | AsyncStackDetachedMessage;
+
+function resetPreparedState() {
+  prepared = false;
+  preparePromise = null;
+}
 
 function installListener() {
   if (listenerInstalled) return;
@@ -92,6 +117,17 @@ function installListener() {
           pending.delete(id);
         }
       }
+    } else if (msg.type === 'ASYNC_STACK_DETACHED') {
+      // The background lost its debugger session. Any in-flight call is
+      // already doomed (no listener will capture the marker), and the
+      // cached `prepared` state is stale. Tear both down so the next call
+      // re-prepares from scratch.
+      resetPreparedState();
+      for (const [id, call] of pending) {
+        clearTimeout(call.timeoutId);
+        call.reject(new Error('asyncStack: debugger detached'));
+        pending.delete(id);
+      }
     }
   });
 }
@@ -102,6 +138,7 @@ function prepare(): Promise<void> {
   preparePromise = new Promise<void>((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       window.removeEventListener('message', onReady);
+      preparePromise = null;
       reject(
         new Error(
           'asyncStack: timed out waiting for the Redux DevTools extension ' +
@@ -109,7 +146,7 @@ function prepare(): Promise<void> {
             'and the page loaded under it?',
         ),
       );
-    }, 5000);
+    }, PREPARE_TIMEOUT_MS);
     function onReady(event: MessageEvent<IncomingMessage>) {
       if (event.source !== window) return;
       const msg = event.data;
@@ -148,6 +185,11 @@ function prepare(): Promise<void> {
 //
 // Callers that need a complete stack on the very first call should call
 // `await window.asyncStack.warmup()` once during initialization.
+//
+// `prepared` is also flipped back to false when the background tells us
+// (via ASYNC_STACK_DETACHED) that its debugger session has gone away, or
+// when a capture times out — the latter handles the case where the MV3
+// service worker was unloaded silently and we never got a detach event.
 let prepared = false;
 
 async function ensurePrepared(): Promise<void> {
@@ -156,14 +198,13 @@ async function ensurePrepared(): Promise<void> {
   prepared = true;
 }
 
-export async function asyncStack(): Promise<string> {
-  await ensurePrepared();
+function captureOnce(): Promise<string> {
   const id = `${Date.now()}-${nextCallId++}`;
   return new Promise<string>((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`asyncStack: timed out waiting for stack id=${id}`));
-    }, 5000);
+    }, CAPTURE_TIMEOUT_MS);
     pending.set(id, { resolve, reject, timeoutId });
     // The marker is what the background's debugger event listener filters
     // on — calling console.warn synchronously here means the stack the
@@ -172,9 +213,33 @@ export async function asyncStack(): Promise<string> {
     // (not error/log) so the page's own log output remains untouched in
     // user code, and route through a marker prefix so we don't intercept
     // unrelated console output.
-    // eslint-disable-next-line no-console
     console.warn(ASYNC_STACK_MARKER + id);
   });
+}
+
+function isCaptureTimeout(err: unknown): boolean {
+  return (
+    err instanceof Error && err.message.startsWith('asyncStack: timed out ')
+  );
+}
+
+export async function asyncStack(): Promise<string> {
+  await ensurePrepared();
+  try {
+    return await captureOnce();
+  } catch (err) {
+    // A capture timeout almost always means the background's debugger
+    // session is gone (MV3 idle unload, user cancelled the attach banner,
+    // tab navigated and the listener was torn down). Drop the cached
+    // prepare state, re-prepare, and retry once. The retry path crosses
+    // the message-handler host boundary so the async parent chain may be
+    // truncated for this single recovery call, but subsequent calls work
+    // with a full chain again because `prepared` is back to true.
+    if (!isCaptureTimeout(err)) throw err;
+    resetPreparedState();
+    await ensurePrepared();
+    return await captureOnce();
+  }
 }
 
 asyncStack.warmup = async function warmup(): Promise<void> {
