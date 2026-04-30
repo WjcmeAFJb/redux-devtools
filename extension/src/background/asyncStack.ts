@@ -6,10 +6,39 @@
 // for Runtime.consoleAPICalled events filtered to ONLY our marker prefix —
 // so unrelated console.* calls and uncaught exceptions never round-trip a
 // stack to the page. That is the optimization the feature spec asked for.
+//
+// Lifetime
+// --------
+// MV3 service workers are unloaded after ~30s of idle, and Chrome auto-
+// detaches chrome.debugger when that happens — which would silently break
+// every asyncStack() call after the first idle window (the page just emits
+// a console.warn marker; if no debugger is attached, the marker is never
+// captured). To keep asyncStack() reliable for the entire page lifetime
+// we do three things:
+//
+//   1. While at least one tab has requested asyncStack, run a self-ping
+//      interval that calls a chrome.* API every 20s. Each call resets the
+//      SW idle timer, so the SW never reaches the 30s idle threshold and
+//      Chrome never unloads it. This is the documented MV3 keep-alive
+//      pattern (see crbug.com/1316588 discussion).
+//
+//   2. Register a periodic chrome.alarm as a backup wake source. If the
+//      SW is killed for a reason that bypasses the keep-alive (browser
+//      restart, OOM, extension reload), the alarm wakes the SW back up
+//      within ~1 minute and the module-init path re-attaches.
+//
+//   3. Persist the set of currently-attached tab ids to
+//      chrome.storage.session so that on module init we can re-attach
+//      chrome.debugger to every tab that asked for asyncStack before the
+//      SW died. The page never has to know the SW restarted.
 
 const ASYNC_STACK_MARKER = '__REDUX_DEVTOOLS_ASYNC_STACK__:';
 const PROTOCOL_VERSION = '1.3';
 const MAX_ASYNC_DEPTH = 32;
+const STORAGE_KEY = 'asyncStack:attachedTabs';
+const KEEP_ALIVE_INTERVAL_MS = 20_000;
+const HEARTBEAT_ALARM = 'asyncStack:heartbeat';
+const HEARTBEAT_PERIOD_MIN = 1;
 
 type DebuggeeTab = chrome.debugger.Debuggee & { tabId: number };
 
@@ -46,6 +75,30 @@ interface AttachedTabState {
 
 const attached = new Map<number, AttachedTabState>();
 
+async function persistAttachedTabs(): Promise<void> {
+  try {
+    await chrome.storage.session.set({
+      [STORAGE_KEY]: Array.from(attached.keys()),
+    });
+  } catch {
+    // chrome.storage.session is available on every Chrome that supports
+    // MV3 SWs; if the write fails we just lose the cross-restart restore
+    // for this entry. The page-side timeout-and-retry handles that case.
+  }
+}
+
+async function readAttachedTabs(): Promise<number[]> {
+  try {
+    const stored = await chrome.storage.session.get(STORAGE_KEY);
+    const value = stored[STORAGE_KEY];
+    return Array.isArray(value)
+      ? value.filter((v): v is number => typeof v === 'number')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 async function attach(tabId: number): Promise<void> {
   const target: DebuggeeTab = { tabId };
   await chrome.debugger.attach(target, PROTOCOL_VERSION);
@@ -63,10 +116,17 @@ async function attach(tabId: number): Promise<void> {
 function ensureAttached(tabId: number): Promise<void> {
   let state = attached.get(tabId);
   if (state) return state.readyPromise;
-  const readyPromise = attach(tabId).catch((err) => {
-    attached.delete(tabId);
-    throw err;
-  });
+  const readyPromise = attach(tabId).then(
+    () => {
+      void persistAttachedTabs();
+      void ensureLifetimeGuards();
+    },
+    (err) => {
+      attached.delete(tabId);
+      void persistAttachedTabs();
+      throw err;
+    },
+  );
   state = { readyPromise };
   attached.set(tabId, state);
   return readyPromise;
@@ -75,6 +135,8 @@ function ensureAttached(tabId: number): Promise<void> {
 function detach(tabId: number) {
   if (!attached.has(tabId)) return;
   attached.delete(tabId);
+  void persistAttachedTabs();
+  void ensureLifetimeGuards();
   // Best-effort detach — tab may already be gone.
   void chrome.debugger.detach({ tabId }).catch(() => undefined);
 }
@@ -152,6 +214,94 @@ function sendToTab(tabId: number, message: unknown) {
   void chrome.tabs.sendMessage(tabId, message).catch(() => undefined);
 }
 
+// Keep-alive: while at least one tab has requested asyncStack, ping a
+// chrome.* API every 20s. Each call resets the MV3 SW idle timer
+// (default 30s), so Chrome never unloads us — and chrome.debugger never
+// gets auto-detached out from under the page. The interval is reset
+// every time we re-enter this function (e.g., on attach), so we don't
+// stack timers across SW restarts.
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+function startKeepAlive() {
+  if (keepAliveTimer != null) return;
+  keepAliveTimer = setInterval(() => {
+    // getPlatformInfo is cheap, doesn't require any permission, and
+    // counts as activity for the SW idle timer. Errors are not
+    // meaningful here — we just need the API call itself.
+    void chrome.runtime.getPlatformInfo().catch(() => undefined);
+  }, KEEP_ALIVE_INTERVAL_MS);
+}
+
+function stopKeepAlive() {
+  if (keepAliveTimer == null) return;
+  clearInterval(keepAliveTimer);
+  keepAliveTimer = null;
+}
+
+// Heartbeat alarm: backstop for the rare case the SW is killed despite
+// the keep-alive (browser restart, extension reload, OOM). Alarms wake
+// the SW even when the JS VM has been torn down, and on wake the
+// module-init path below re-attaches the debugger to all stored tabs.
+async function ensureLifetimeGuards(): Promise<void> {
+  if (attached.size > 0) {
+    startKeepAlive();
+    try {
+      const existing = await chrome.alarms.get(HEARTBEAT_ALARM);
+      if (!existing) {
+        await chrome.alarms.create(HEARTBEAT_ALARM, {
+          periodInMinutes: HEARTBEAT_PERIOD_MIN,
+        });
+      }
+    } catch {
+      // chrome.alarms unavailable (e.g., test environment) — keep-alive
+      // alone is still effective for the live-session case.
+    }
+  } else {
+    stopKeepAlive();
+    try {
+      await chrome.alarms.clear(HEARTBEAT_ALARM);
+    } catch {
+      // no-op
+    }
+  }
+}
+
+// Restore attach state when the SW comes back up. Module init runs
+// every time the SW wakes (initial install, browser start, post-idle
+// wake by alarm, etc.) — so this is where we paper over SW death from
+// the page's point of view. The page's `prepared = true` flag stays
+// valid because by the time the page's next console.warn fires, the
+// debugger is reattached and listening again.
+async function restoreAttachedTabs(): Promise<void> {
+  const tabIds = await readAttachedTabs();
+  if (tabIds.length === 0) return;
+  await Promise.all(
+    tabIds.map(async (tabId) => {
+      try {
+        await ensureAttached(tabId);
+      } catch {
+        // Tab closed, navigated, or debugger banner refused — drop it
+        // from the persisted set so we don't keep retrying forever.
+        attached.delete(tabId);
+        await persistAttachedTabs();
+      }
+    }),
+  );
+  await ensureLifetimeGuards();
+}
+
+void restoreAttachedTabs();
+
+if (typeof chrome.alarms?.onAlarm?.addListener === 'function') {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== HEARTBEAT_ALARM) return;
+    // Just having the handler run wakes the SW; restoreAttachedTabs has
+    // already executed at module init, so attach state is current. We
+    // also re-establish the keep-alive interval in case it was lost.
+    if (attached.size > 0) startKeepAlive();
+  });
+}
+
 chrome.debugger.onEvent.addListener(
   (source, method, untypedParams) => {
     if (method !== 'Runtime.consoleAPICalled') return;
@@ -187,6 +337,8 @@ chrome.debugger.onDetach.addListener((source) => {
   // for an attach we already cleaned up via tab close.
   const wasAttached = attached.has(tabId);
   attached.delete(tabId);
+  void persistAttachedTabs();
+  void ensureLifetimeGuards();
   if (wasAttached) notifyDetached(tabId);
 });
 

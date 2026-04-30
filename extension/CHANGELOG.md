@@ -4,22 +4,38 @@
 
 ### Patch Changes
 
-- fix(extension): recover window.asyncStack() after MV3 service worker idle unload
+- fix(extension): keep window.asyncStack() working for the full page lifetime
 
-  The previous implementation cached a `prepared` flag on the page side that
-  only flipped to true on first successful prepare and never reset. When the
-  Manifest V3 service worker was unloaded after ~30s of idle (or the user
-  cancelled the chrome.debugger attach banner), the debugger session was
-  detached but the page kept emitting markers no listener was attached to —
-  every subsequent `asyncStack()` call timed out at 5 seconds. This matched
-  the reported "works a few times then fails every time" symptom.
+  The Manifest V3 service worker is unloaded after ~30s of idle, which
+  auto-detaches `chrome.debugger`. The original asyncStack feature did
+  not account for this: the page-side `prepared` flag was cached after
+  the first successful attach and never reset, so once the SW idled out
+  every subsequent `asyncStack()` call timed out at 5 seconds. This
+  matched the reported "works a few times then fails every time" symptom.
 
-  Fix:
+  Root-cause fix — make the SW stay alive while asyncStack is in use:
+
+  - Self-ping a chrome.\* API every 20s while at least one tab has
+    requested asyncStack. Each call resets the SW idle timer, so Chrome
+    never unloads the SW and chrome.debugger stays attached.
+  - Persist the set of attached tab ids to `chrome.storage.session`. On
+    SW restart, module init reads the list and re-attaches to every
+    listed tab, so a SW death the keep-alive could not prevent (browser
+    restart, extension reload, OOM) is invisible to the page.
+  - Register a periodic `chrome.alarms` heartbeat as a backstop wake
+    source for the SW-killed-with-no-other-event case. New `alarms`
+    permission is added to the chrome / edge / firefox manifests.
+
+  Defense-in-depth (keeps working even if a guard fails):
+
   - Background sends `ASYNC_STACK_DETACHED` on `chrome.debugger.onDetach`
-    so the page can invalidate its cached prepare state immediately.
-  - Page-side capture timeout is shortened to 1.5s and on timeout the page
-    resets prepare and retries once — covers the silent SW-killed case
-    where the detach event itself never reached us.
+    (e.g., the user cancels the debugger banner) so the page invalidates
+    its cached prepare state immediately rather than waiting for the
+    next call to time out.
+  - Page-side capture timeout shortened from 5s to 1.5s, and on timeout
+    the page resets prepare and retries once. With the keep-alive in
+    place this path is rarely hit, but it ensures recovery even in the
+    paranoid case where every other guard misses.
 
 ## 3.2.12
 
