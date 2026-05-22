@@ -220,13 +220,17 @@ function post<S, A extends Action<string>>(
   window.postMessage(message, '*');
 }
 
-function getStackTrace(
+function getStackTrace<A extends Action<string>>(
   config: Config,
+  // The action being dispatched, so a `trace` function can vary the captured
+  // stack per-action (filter, drop, or substitute). Already unwrapped from any
+  // structural action and normalized so a string action is passed as `{ type }`.
+  action: A,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
   toExcludeFromTrace: Function | undefined,
 ) {
   if (!config.trace) return undefined;
-  if (typeof config.trace === 'function') return config.trace();
+  if (typeof config.trace === 'function') return config.trace(action);
 
   let stack;
   let extraFrames = 0;
@@ -271,7 +275,14 @@ function amendActionType<A extends Action<string>>(
   toExcludeFromTrace: Function | undefined,
 ): StructuralPerformAction<A> {
   const timestamp = Date.now();
-  const stack = getStackTrace(config, toExcludeFromTrace);
+  // Unwrap to the bare action so a `trace` function sees `{ type, ... }`,
+  // matching the documented `(action) => string` signature.
+  const tracedAction = (
+    typeof action === 'string'
+      ? { type: action }
+      : (action as StructuralPerformAction<A>).action ?? action
+  ) as A;
+  const stack = getStackTrace(config, tracedAction, toExcludeFromTrace);
   if (typeof action === 'string') {
     return { action: { type: action } as A, timestamp, stack };
   }
