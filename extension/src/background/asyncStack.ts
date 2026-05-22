@@ -302,7 +302,12 @@ if (typeof chrome.alarms?.onAlarm?.addListener === 'function') {
   });
 }
 
-chrome.debugger.onEvent.addListener(
+// chrome.debugger is Chromium-only — undefined in Firefox. Guard the
+// registration (like the chrome.alarms/chrome.tabs handlers above): without
+// it, this line throws at background load and aborts the rest of the module,
+// including the chrome.runtime.onMessage listener the panel relies on to
+// detect connected stores. asyncStack() is simply unavailable in Firefox.
+chrome.debugger?.onEvent?.addListener(
   (source, method, untypedParams) => {
     if (method !== 'Runtime.consoleAPICalled') return;
     const tabId = source.tabId;
@@ -330,7 +335,7 @@ chrome.debugger.onEvent.addListener(
   },
 );
 
-chrome.debugger.onDetach.addListener((source) => {
+chrome.debugger?.onDetach?.addListener((source) => {
   const tabId = source.tabId;
   if (tabId == null) return;
   // Only notify if we believed we were attached — avoids a notification
