@@ -1,5 +1,22 @@
 # remotedev-redux-devtools-extension
 
+## 3.2.14
+
+### Patch Changes
+
+- fix(extension): pass the dispatched action to a `trace` function
+
+  When `config.trace` is a function, the `connect()` API now calls it with
+  the action being dispatched, matching the documented
+  `(action) => string` signature and the behavior of the store-enhancer
+  path (which already forwarded the action via `instrument`). Previously
+  the `connect()` path invoked `trace()` with no arguments, so callers had
+  no way to vary the captured stack per-action (filter, drop, or
+  substitute by action type/payload). The action is unwrapped from any
+  structural action and normalized so a string action is passed as
+  `{ type }`. Returning a falsy value still falls back to / disables the
+  trace as before.
+
 ## 3.2.13
 
 ### Patch Changes
