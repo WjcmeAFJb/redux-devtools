@@ -1,5 +1,27 @@
 # remotedev-redux-devtools-extension
 
+## 3.2.15
+
+### Patch Changes
+
+- fix(extension): restore store detection in Firefox (regression since the asyncStack feature)
+
+  `background/asyncStack.ts` registered `chrome.debugger.onEvent` /
+  `chrome.debugger.onDetach` listeners at module load **without a guard**.
+  `chrome.debugger` is Chromium-only — it is `undefined` in Firefox — so the
+  line threw a `TypeError` while the background service worker was
+  initializing. Because the throw happened before
+  `chrome.runtime.onMessage.addListener` ran, the message handler the panel
+  uses to discover connected stores was never registered, and Firefox
+  reported no stores at all.
+
+  Both registrations are now guarded with optional chaining
+  (`chrome.debugger?.onEvent?.addListener(...)`), matching the existing
+  `chrome.alarms`/`chrome.tabs` guards in the same file. The background
+  script now loads cleanly in Firefox; `window.asyncStack()` remains a
+  Chrome-only feature there (it requires `chrome.debugger`), which is the
+  intended behavior.
+
 ## 3.2.14
 
 ### Patch Changes
