@@ -1,5 +1,32 @@
 # remotedev-redux-devtools-extension
 
+## 3.2.16
+
+### Patch Changes
+
+- fix(trace-tab): preserve intermediate directories when opening stack-trace
+  entries in an external editor; auto-detect absolute paths in source maps.
+
+  Two related issues with the "open in external editor" feature were fixed:
+
+  1. **Lost intermediate path segments.** When a source map only carried a
+     partial source (e.g. just `file.tsx`), `openInEditor` used to concatenate
+     it directly onto the configured `projectPath`, so a stack entry for
+     `http://localhost:5173/src/some/path/file.tsx?t=12345678:565:30` opened
+     `/home/user/workspace/file.tsx` instead of
+     `/home/user/workspace/src/some/path/file.tsx`. The path is now resolved
+     against the served URL's pathname, which is the source of truth for
+     project-relative paths in dev-server setups (Vite, etc.). Cache-buster
+     query strings (`?t=…`, `#…`) are stripped consistently.
+
+  2. **`projectPath` is now optional when source maps already contain
+     absolute filesystem paths** (the Vite default — sources like
+     `/home/user/project/src/file.tsx`). The new resolver compares the source
+     against the served URL pathname to tell an absolute fs path apart from a
+     URL pathname, and skips prepending `projectPath` in the absolute case.
+     This means users juggling several projects no longer need to keep
+     editing the project root setting between them.
+
 ## 3.2.15
 
 ### Patch Changes
