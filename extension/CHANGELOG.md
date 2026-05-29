@@ -1,5 +1,35 @@
 # remotedev-redux-devtools-extension
 
+## 3.2.17
+
+### Patch Changes
+
+- fix(trace-tab): stop racing Chrome's "Open app …?" confirmation prompt
+  when launching an external editor.
+
+  The 3.2.16-era `openInEditor` (inherited unchanged from the upstream
+  fork) opened the editor's custom-protocol URL by creating a real tab
+  via `chrome.tabs.create` and removing the tab on the next
+  `chrome.windows.onFocusChanged` event. Chrome surfaces an "Open app
+  'Visual Studio Code'?" confirmation in that new tab, and the user has
+  to click "Open" to accept. When devtools was undocked into its own
+  window, clicking the prompt shifted window focus — which fired our
+  listener, which removed the tab, which killed the prompt. The protocol
+  never launched. (Even with devtools docked, a blank tab flashed open
+  on every click.)
+
+  We now navigate a hidden iframe to the protocol URL instead. Chrome's
+  confirmation prompt is rendered at the window level and is not coupled
+  to the iframe lifetime, so the prompt survives focus changes and no
+  blank tab is left behind. Iframe is cleaned up after 10 s.
+
+- docs(options): reword the projectPath hint. 3.2.16 claimed it could be
+  left empty for Vite ("source maps already contain absolute paths"),
+  but that only holds for plugin pipelines whose source maps actually
+  emit absolute on-disk paths in `sources`. Many Vite setups emit
+  URL-relative paths instead, in which case projectPath is still
+  required. The hint now spells out both cases.
+
 ## 3.2.16
 
 ### Patch Changes
