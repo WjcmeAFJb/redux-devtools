@@ -27,31 +27,20 @@ function openResource(
   }) as () => void);
 }
 
-function openAndCloseTab(url: string) {
-  chrome.tabs.create({ url }, (tab) => {
-    const removeTab = () => {
-      chrome.windows.onFocusChanged.removeListener(removeTab);
-      if (tab && tab.id) {
-        chrome.tabs.remove(tab.id, () => {
-          if (chrome.runtime.lastError) console.log(chrome.runtime.lastError);
-          else if (chrome.devtools && chrome.devtools.inspectedWindow) {
-            void chrome.tabs.update(chrome.devtools.inspectedWindow.tabId, {
-              active: true,
-            });
-          }
-        });
-      }
-    };
-    if (chrome.windows) chrome.windows.onFocusChanged.addListener(removeTab);
-  });
-}
-
-function openInIframe(url: string) {
+// Trigger the editor's custom protocol (vscode://, webstorm://, …) by
+// navigating a hidden iframe to it. The previous implementation created a real
+// tab via chrome.tabs.create and removed it on the next window-focus change,
+// which raced against Chrome's "Open app …?" confirmation prompt — when
+// devtools was undocked, clicking the prompt shifted window focus and the
+// listener killed the tab (and the prompt) before the protocol could launch.
+// The iframe approach keeps the confirmation prompt at the window level,
+// untouched by our cleanup.
+function navigateToProtocolUrl(url: string) {
   const iframe = document.createElement('iframe');
   iframe.src = url;
   iframe.style.display = 'none';
   document.body.appendChild(iframe);
-  setTimeout(() => iframe.parentNode!.removeChild(iframe), 3000);
+  setTimeout(() => iframe.parentNode?.removeChild(iframe), 10000);
 }
 
 function stripUrlAndQuery(p: string): string {
@@ -181,12 +170,7 @@ function openInEditor(
       // sublime, emacs, macvim, textmate + custom like https://github.com/eclemens/atom-url-handler
       url = `${editor}://open/?url=file://${fullPath}&line=${line}&column=${column}`;
   }
-  if (chrome.devtools && !isFF) {
-    if (chrome.tabs) openAndCloseTab(url);
-    else window.open(url);
-  } else {
-    openInIframe(url);
-  }
+  navigateToProtocolUrl(url);
 }
 
 export default function openFile(
