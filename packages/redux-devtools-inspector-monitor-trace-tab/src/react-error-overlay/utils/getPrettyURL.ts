@@ -5,6 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+// Strips dev-server cache busters (e.g. Vite's `?t=12345678`) and URL
+// fragments so the display matches what the editor will open.
+function stripQuery(name: string): string {
+  return name.replace(/[?#].*$/, '');
+}
+
 function getPrettyURL(
   sourceFileName: string | null | undefined,
   sourceLineNumber: number | null | undefined,
@@ -16,14 +22,15 @@ function getPrettyURL(
 ): string {
   let prettyURL;
   if (!compiled && sourceFileName && typeof sourceLineNumber === 'number') {
+    const cleanSourceFileName = stripQuery(sourceFileName);
     // Remove everything up to the first /src/ or /node_modules/
     const trimMatch = /^[/|\\].*?[/|\\]((src|node_modules)[/|\\].*)/.exec(
-      sourceFileName,
+      cleanSourceFileName,
     );
     if (trimMatch && trimMatch[1]) {
       prettyURL = trimMatch[1];
     } else {
-      prettyURL = sourceFileName;
+      prettyURL = cleanSourceFileName;
     }
     prettyURL += `:${sourceLineNumber}`;
     // Note: we intentionally skip 0's because they're produced by cheap Webpack maps
@@ -31,7 +38,7 @@ function getPrettyURL(
       prettyURL += `:${sourceColumnNumber}`;
     }
   } else if (fileName && typeof lineNumber === 'number') {
-    prettyURL = `${fileName}:${lineNumber}`;
+    prettyURL = `${stripQuery(fileName)}:${lineNumber}`;
     // Note: we intentionally skip 0's because they're produced by cheap Webpack maps
     if (columnNumber) {
       prettyURL += `:${columnNumber}`;

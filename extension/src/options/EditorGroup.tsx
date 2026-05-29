@@ -75,7 +75,9 @@ export default function EditorGroup({ options, saveOption }: OptionsProps) {
           }
         />
         <div className="option__hint">
-          Run `pwd` in your project root directory to get it
+          Run `pwd` in your project root directory to get it. Leave empty if
+          your source maps already contain absolute paths (e.g. Vite dev
+          server) — the path will be read from the source map.
         </div>
       </div>
     </fieldset>
