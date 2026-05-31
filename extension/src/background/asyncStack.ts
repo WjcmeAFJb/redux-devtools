@@ -360,6 +360,19 @@ chrome.runtime.onMessage.addListener(
     if (!msg || typeof msg !== 'object') return undefined;
     const type = (msg as { type?: string }).type;
     if (type !== 'ASYNC_STACK_PREPARE') return undefined;
+    // chrome.debugger is Chromium-only — undefined in Firefox. Attaching is
+    // impossible there, so report the feature as unsupported synchronously
+    // instead of letting attach() throw a `chrome.debugger is undefined`
+    // TypeError. The page caches this and degrades to a synchronous stack
+    // rather than rejecting (and re-asking) on every asyncStack() call.
+    if (!chrome.debugger) {
+      sendResponse({
+        type: 'ASYNC_STACK_ERROR',
+        message: 'asyncStack is only available in Chromium-based browsers',
+        unsupported: true,
+      });
+      return undefined;
+    }
     const tabId = sender.tab?.id;
     if (tabId == null) {
       sendResponse({

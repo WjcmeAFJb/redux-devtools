@@ -47,6 +47,26 @@ const pending = new Map<string, PendingCall>();
 let nextCallId = 1;
 let preparePromise: Promise<void> | null = null;
 let listenerInstalled = false;
+// Set once the background reports that chrome.debugger is unavailable (e.g.
+// Firefox). Permanent for the page's lifetime: asyncStack() then resolves with
+// the synchronous stack instead of rejecting, so callers don't get a spam of
+// "Uncaught (in promise)" rejections and we stop round-tripping to a debugger
+// that will never attach.
+let debuggerUnavailable = false;
+let warnedUnsupported = false;
+
+// Degraded stack for environments without chrome.debugger. The async parent
+// chain isn't available, but the synchronous call stack is still useful.
+function fallbackStack(): string {
+  if (!warnedUnsupported) {
+    warnedUnsupported = true;
+    console.warn(
+      'asyncStack: async call-stack capture needs chrome.debugger, which is ' +
+        'Chromium-only. Falling back to the synchronous stack.',
+    );
+  }
+  return new Error().stack || '';
+}
 
 interface AsyncStackPrepareMessage {
   readonly source: typeof PAGE_SOURCE;
@@ -70,6 +90,9 @@ interface AsyncStackErrorMessage {
   readonly type: 'ASYNC_STACK_ERROR';
   readonly id?: string;
   readonly message: string;
+  // Set by the background when chrome.debugger is unavailable (Firefox). The
+  // page treats this as permanent and stops asking, degrading to a sync stack.
+  readonly unsupported?: boolean;
 }
 
 interface AsyncStackDetachedMessage {
@@ -160,6 +183,9 @@ function prepare(): Promise<void> {
         clearTimeout(timeoutId);
         // Reset so a future attempt can retry.
         preparePromise = null;
+        // Permanent failure (no chrome.debugger): remember it so asyncStack()
+        // degrades to a synchronous stack instead of re-preparing every call.
+        if (msg.unsupported) debuggerUnavailable = true;
         reject(new Error(msg.message));
       }
     }
@@ -224,7 +250,15 @@ function isCaptureTimeout(err: unknown): boolean {
 }
 
 export async function asyncStack(): Promise<string> {
-  await ensurePrepared();
+  if (debuggerUnavailable) return fallbackStack();
+  try {
+    await ensurePrepared();
+  } catch (err) {
+    // The very first call in an unsupported browser learns chrome.debugger is
+    // missing here; degrade instead of propagating the rejection.
+    if (debuggerUnavailable) return fallbackStack();
+    throw err;
+  }
   try {
     return await captureOnce();
   } catch (err) {
@@ -243,5 +277,12 @@ export async function asyncStack(): Promise<string> {
 }
 
 asyncStack.warmup = async function warmup(): Promise<void> {
-  await ensurePrepared();
+  if (debuggerUnavailable) return;
+  try {
+    await ensurePrepared();
+  } catch (err) {
+    // In an unsupported browser, warming up is a no-op rather than a throw.
+    if (debuggerUnavailable) return;
+    throw err;
+  }
 };
