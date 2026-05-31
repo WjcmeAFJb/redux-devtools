@@ -1,5 +1,44 @@
 # remotedev-redux-devtools-extension
 
+## 3.2.18
+
+### Patch Changes
+
+- fix(extension): stop `window.asyncStack()` from spamming "Uncaught (in
+  promise)" errors in Firefox.
+
+  `window.asyncStack()`/`warmup()` post an `ASYNC_STACK_PREPARE` message that
+  the background turns into a `chrome.debugger.attach()` call. `chrome.debugger`
+  is Chromium-only, so in Firefox the attach throws `can't access property
+  "attach", chrome.debugger is undefined`. That error round-trips to the page
+  and rejects `prepare()`; because callers rarely `.catch()` `asyncStack()` and
+  the cached prepare promise is reset on every rejection, each call produced a
+  fresh unhandled rejection.
+
+  The background now reports the feature as unsupported (instead of attempting
+  to attach) when `chrome.debugger` is absent, and the page caches that and
+  degrades to the synchronous `Error().stack` — resolving with a usable (if
+  shallower) stack and warning once — rather than rejecting.
+
+- fix(extension): stop `ASYNC_STACK_PREPARE` from corrupting the instances
+  store, which made multi-store panels hang on "loading" after reopen.
+
+  The background runs two `chrome.runtime.onMessage` listeners — the store's
+  `messaging` and the dedicated asyncStack handler — and both receive every
+  `chrome.runtime.sendMessage`. The content script forwards
+  `ASYNC_STACK_PREPARE` that way, so `messaging` saw it too and, lacking a
+  guard, dispatched it as a malformed `UPDATE_STATE`. That pointed
+  `instances.current` at a phantom instance keyed by the bare tab id, with no
+  `states` entry. On the next panel connection the cached-state re-send threw
+  while destructuring the missing state and the panel never received anything —
+  so a reopened panel backed by raw-API `connect()` stores (which, unlike the
+  store enhancer, do not re-relay on `START`) was stuck loading. First open
+  usually worked because real updates moved `current` back to a real instance,
+  so the failure looked intermittent.
+
+  `messaging` now ignores `ASYNC_STACK_*` messages, and the on-connect re-send
+  is guarded so a half-registered instance can never throw.
+
 ## 3.2.17
 
 ### Patch Changes
