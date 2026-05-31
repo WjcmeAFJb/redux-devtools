@@ -455,6 +455,20 @@ function messaging<S, A extends Action<string>>(
   request: BackgroundStoreMessage<S, A>,
   sender: chrome.runtime.MessageSender,
 ) {
+  // asyncStack relays { type: 'ASYNC_STACK_PREPARE' } over
+  // chrome.runtime.sendMessage, which every onMessage listener receives —
+  // including this one. It is NOT a store update: the dedicated listener in
+  // background/asyncStack.ts owns it. Bail out here, otherwise it falls
+  // through to the UPDATE_STATE path below and gets dispatched as a malformed
+  // update that points `instances.current` at a stateless phantom keyed by the
+  // bare tab id. That phantom has no `states` entry, so the cached-state
+  // re-send in onConnect later throws while destructuring it and a reopened
+  // panel never receives any state (it hangs on "loading").
+  const requestType = (request as { type?: string }).type;
+  if (typeof requestType === 'string' && requestType.startsWith('ASYNC_STACK_')) {
+    return;
+  }
+
   let tabId = getId(sender);
   console.log(`Message from tab ${tabId}: ${request.type ?? request.split}`);
   if (!tabId) return;
@@ -615,12 +629,16 @@ function onConnect<S, A extends Action<string>>(port: chrome.runtime.Port) {
     port.onDisconnect.addListener(disconnect('panel', id, listener));
 
     const { current } = store.getState().instances;
-    if (current !== 'default') {
+    const options = store.getState().instances.options[current];
+    const state = store.getState().instances.states[current];
+    // `current !== 'default'` should imply a fully-registered instance, but
+    // guard against a half-registered one (no options/state) so a fresh panel
+    // never hangs: throwing here would abort onConnect before any state is
+    // delivered, leaving the panel stuck on "loading".
+    if (current !== 'default' && options && state) {
       const connectionId = Object.entries(
         store.getState().instances.connections,
       ).find(([, instanceIds]) => instanceIds.includes(current))?.[0];
-      const options = store.getState().instances.options[current];
-      const state = store.getState().instances.states[current];
       const { actionsById, computedStates, committedState, ...rest } = state;
       toMonitors({
         type: UPDATE_STATE,
