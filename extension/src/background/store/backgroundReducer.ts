@@ -1,5 +1,6 @@
 import { combineReducers, Reducer } from 'redux';
-import { instances, InstancesState } from '@redux-devtools/app';
+import type { InstancesState } from '@redux-devtools/app';
+import instances from '../../store/instances.js';
 import { BackgroundAction } from './backgroundStore.js';
 
 export interface BackgroundState {

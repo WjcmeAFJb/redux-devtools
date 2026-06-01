@@ -1,7 +1,6 @@
 import { combineReducers, Reducer } from 'redux';
 import {
   connection,
-  instances,
   monitor,
   notification,
   reports,
@@ -12,6 +11,7 @@ import {
   StoreState,
   theme,
 } from '@redux-devtools/app';
+import instances from '../../store/instances.js';
 
 const rootReducer: Reducer<
   StoreState,

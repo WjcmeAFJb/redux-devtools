@@ -33,6 +33,10 @@ import type {
 import type { Position } from '../../pageScript/api/openWindow.js';
 import type { BackgroundState } from './backgroundReducer.js';
 import { store } from '../index.js';
+import {
+  REMOVE_SINGLE_INSTANCE,
+  RemoveSingleInstanceAction,
+} from '../../store/instances.js';
 
 interface TabMessageBase {
   readonly type: string;
@@ -209,7 +213,8 @@ export type PanelMessageWithoutNA<S, A extends Action<string>> =
   | SetPersistAction;
 export type PanelMessage<S, A extends Action<string>> =
   | PanelMessageWithoutNA<S, A>
-  | NAAction;
+  | NAAction
+  | RemoveSingleInstanceAction;
 export type PanelMessageWithSplitAction<S, A extends Action<string>> =
   | PanelMessage<S, A>
   | SplitUpdateStateAction<S, A>;
@@ -264,7 +269,8 @@ type MonitorAction<S, A extends Action<string>> =
   | NAAction
   | ErrorMessage
   | UpdateStateAction<S, A>
-  | SetPersistAction;
+  | SetPersistAction
+  | RemoveSingleInstanceAction;
 
 // Chrome message limit is 64 MB, but we're using 32 MB to include other object's parts
 const maxChromeMsgSize = 32 * 1024 * 1024;
@@ -478,6 +484,19 @@ function messaging<S, A extends Action<string>>(
     if (!Object.keys(store.getState().instances.connections).length) {
       store.dispatch({ type: DISCONNECTED });
     }
+    return;
+  }
+  if (request.type === 'REMOVE') {
+    // Remove a single connect() instance (conn.disconnect()) from the
+    // background store and every open monitor, keeping any sibling instances
+    // on the same tab. The instance key matches the UPDATE_STATE form below.
+    const id = `${tabId}/${request.instanceId}`;
+    const action: RemoveSingleInstanceAction = {
+      type: REMOVE_SINGLE_INSTANCE,
+      id,
+    };
+    store.dispatch(action);
+    toMonitors(action);
     return;
   }
   if (request.type === 'OPEN_OPTIONS') {

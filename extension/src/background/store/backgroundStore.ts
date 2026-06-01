@@ -7,6 +7,7 @@ import {
 } from '@redux-devtools/app';
 import rootReducer, { BackgroundState } from './backgroundReducer.js';
 import api, { CONNECTED, DISCONNECTED } from './apiMiddleware.js';
+import { RemoveSingleInstanceAction } from '../../store/instances.js';
 
 interface LiftedActionActionBase {
   action?: DispatchAction | string | CustomAction;
@@ -57,7 +58,8 @@ export type BackgroundAction =
   | StoreActionWithoutLiftedAction
   | LiftedActionAction
   | ConnectedAction
-  | DisconnectedAction;
+  | DisconnectedAction
+  | RemoveSingleInstanceAction;
 
 export default function configureStore(
   preloadedState?: Partial<BackgroundState>,

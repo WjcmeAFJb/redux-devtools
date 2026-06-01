@@ -115,6 +115,14 @@ interface DisconnectMessage {
   readonly source: typeof source;
 }
 
+// Remove a single connected instance from the devtools (one connect() store),
+// without tearing down the whole tab the way DISCONNECT does.
+interface RemoveInstanceMessage {
+  readonly type: 'REMOVE';
+  readonly instanceId: number;
+  readonly source: typeof source;
+}
+
 interface InitMessage<S, A extends Action<string>> {
   readonly type: 'INIT';
   readonly payload: string;
@@ -200,7 +208,8 @@ export type PageScriptToContentScriptMessageWithoutDisconnectOrInitInstance<
   | ErrorMessage
   | GetReportMessage
   | StopMessage
-  | OpenMessage;
+  | OpenMessage
+  | RemoveInstanceMessage;
 
 export type PageScriptToContentScriptMessageWithoutDisconnect<
   S,
@@ -560,6 +569,10 @@ export interface ConnectResponse {
     options?: SendOptions,
   ) => void;
   error: (payload: string) => void;
+  // Remove this single instance from the devtools (drops it from the monitor's
+  // store dropdown). After calling it, send()/init() for this connection become
+  // no-ops; call connect() again to reconnect.
+  disconnect: () => void;
 }
 
 export function connect(preConfig: Config): ConnectResponse {
@@ -577,6 +590,7 @@ export function connect(preConfig: Config): ConnectResponse {
   const localFilter = getLocalFilter(config);
   const autoPause = config.autoPause;
   let isPaused = autoPause;
+  let removed = false;
   let delayedActions: StructuralPerformAction<Action<string>>[] = [];
   let delayedStates: LiftedState<unknown, Action<string>, unknown>[] = [];
 
@@ -621,6 +635,14 @@ export function connect(preConfig: Config): ConnectResponse {
     delete listeners[id];
   };
 
+  const disconnect = () => {
+    if (removed) return;
+    removed = true;
+    delete listeners[id];
+    // Ask the background to drop just this instance and notify the monitors.
+    post({ type: 'REMOVE', instanceId: id, source });
+  };
+
   const sendDelayed = throttle(() => {
     sendMessage(
       delayedActions,
@@ -637,6 +659,7 @@ export function connect(preConfig: Config): ConnectResponse {
     options?: SendOptions,
   ) => {
     if (
+      removed ||
       isPaused ||
       isFiltered(action, localFilter) ||
       (predicate && !predicate(state, action))
@@ -690,6 +713,7 @@ export function connect(preConfig: Config): ConnectResponse {
     state: S,
     liftedData?: LiftedState<S, A, unknown>,
   ) => {
+    if (removed) return;
     const message: InitMessage<S, A> = {
       type: 'INIT',
       payload: stringify(state, config.serialize as Serialize | undefined),
@@ -730,6 +754,7 @@ export function connect(preConfig: Config): ConnectResponse {
     unsubscribe,
     send,
     error,
+    disconnect,
   };
 }
 

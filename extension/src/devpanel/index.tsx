@@ -11,6 +11,7 @@ import {
 } from '@redux-devtools/app';
 import App from '../app/App.js';
 import configureStore from './store/panelStore.js';
+import { REMOVE_SINGLE_INSTANCE } from '../store/instances.js';
 
 import { Action, Store } from 'redux';
 import {
@@ -126,6 +127,9 @@ function init() {
         // TODO Double-check this now that the name is different
         if (message.id === name) renderNA();
         else store!.dispatch({ type: REMOVE_INSTANCE, id: message.id });
+      } else if (message.type === REMOVE_SINGLE_INSTANCE) {
+        // A single connect() store called conn.disconnect(); drop just it.
+        if (store) store.dispatch(message as unknown as StoreAction);
       } else {
         if (!rendered) renderDevTools();
 
