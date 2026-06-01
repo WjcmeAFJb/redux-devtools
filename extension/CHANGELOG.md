@@ -1,5 +1,32 @@
 # remotedev-redux-devtools-extension
 
+## 3.2.19
+
+### Patch Changes
+
+- feat(extension): `connect().disconnect()` to remove a single store from the
+  devtools.
+
+  `window.__REDUX_DEVTOOLS_EXTENSION__.disconnect()` disconnects the whole tab
+  (every connected store), and the `connect()` handle's `unsubscribe()` only
+  detached the page-side listener — the store stayed in the monitor's instance
+  dropdown. There was no way to remove just one of several `connect()` stores.
+
+  The object returned by `connect()` now also exposes `disconnect()`:
+
+  ```js
+  const a = window.__REDUX_DEVTOOLS_EXTENSION__.connect({ name: 'Store A' });
+  const b = window.__REDUX_DEVTOOLS_EXTENSION__.connect({ name: 'Store B' });
+  // …later, drop just Store B from devtools:
+  b.disconnect();
+  ```
+
+  It removes that instance from the background store and every open panel while
+  keeping sibling instances on the same tab; if the removed instance was
+  selected/current, the monitor falls back to a remaining one. After
+  `disconnect()`, that connection's `send()`/`init()` are no-ops (call
+  `connect()` again to reconnect).
+
 ## 3.2.18
 
 ### Patch Changes
